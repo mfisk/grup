@@ -3,7 +3,7 @@
 #Author: Michael Fisk
 #Date: 10-13-94, last modified 7-27-95
 #Language: Perl
-#Version: 2.1
+#Version: 2.2
 # $Id$
 
 #Expand a YP netgroup, recursively, and apply a command to all machines in it
@@ -26,6 +26,7 @@ Only enough of the option name to make it unamiguous is required:
 \t-quiet  \tonly returns the output from the child processes
 \t-summary\tonly returns summary information 
 \t-succeed\tonly show output from commands that succeed
+\t-timeout\tAbort rsh commands after so many seconds (default 60)
 
 The following "ExecOptions" must be after the netgroup and/or hostnames:
 \t-e[xec]   \texecutes an sh command for each machine with any
@@ -38,6 +39,8 @@ EOM
     exit;
 }
 
+$SIG{ALRM} = 'AlrmHandler';
+$Timeout = 60;
 $Header = 1;
 $Summary = 1;
 while($_ = shift) {
@@ -52,6 +55,7 @@ while($_ = shift) {
 	@ARGV = ();
     } elsif (/^-r/) {
 	$ExecCmd = "rsh %mx " . join(" ",@ARGV);
+	$CheckPort = 514;
 	@ARGV = ();
     } elsif (/^-p/) {
 	$PerlCmd = 1;
@@ -70,6 +74,8 @@ while($_ = shift) {
     } elsif (/^-s/) {
 	$SummaryOnly = 1;
 	$quiet = 1;
+    } elsif (/^-t/) {
+	$Timeout = shift;
     } elsif (/^-/) {
 	print stderr "Unknown or ambiguous option `$_'!\n";
     } else {
@@ -133,7 +139,33 @@ sub DoCmd {
 	$exit = ! eval $execcmd;
 	print "\n";
     } else { 
-	$ping = `$execcmd 2>&1`;
+	if ($CheckPort) {
+	    if ($ping = &SocketTest($mx,$CheckPort)) {
+		              #Host not answering
+		$? = 1 << 8;
+	    } else {
+		              #Host should be up.
+		if ($ChildPid = open(pingcmd,"-|")) {
+		    $ping = '';
+		    alarm($Timeout);
+		    while(<pingcmd>) { 
+			$ping .= $_; 
+		    }
+		    alarm(0);
+		} elsif (defined($ChildPid)) {
+		    close(STDERR);
+		    open(STDERR,">&STDOUT");
+		    exec "$execcmd" || die "exec: $!";
+		} else {
+		    print stderr "fork: $!\n";
+		}
+		$ChildPid = 0;
+#		$ping = `$execcmd 2>&1`;
+		alarm(0);
+	    }
+	} else {
+	    $ping = `$execcmd 2>&1`;
+	}
 	$exit = $? >> 8;
 	if (! $ExecCmd) {
 	    $ping =~ s|$mx||g;
@@ -205,6 +237,63 @@ sub CheckGroup {
     }
 }
 
+sub SocketTest {
+    local($Node) = shift;
+    local($Port) = shift;
+    local($sock) = 'tmpS';
 
+    $sockaddr = 'S n a4 x8';
+    $AF_INET = 2;
+    $SOCK_STREAM = 1;
 
+    ($Name, $Alias, $Proto) = getprotobyname('tcp');
+    ($Name, $Alias, $Port)  = getservbyname($Port, 'tcp') 
+        unless $Port =~ /^\d+$/;
+    ($Name, $Alias, $Type, $Len, $ThisAddr) = gethostbyname($Host);
+    ($Name, $Alias, $Type, $Len, $ThatAddr) = gethostbyname($Node);
+    if (! $ThatAddr) { return("Unknown host: $Node\n"); }
 
+    $This = pack( $sockaddr, $AF_INET, 0, $ThisAddr);
+    $That = pack( $sockaddr, $AF_INET, $Port, $ThatAddr);
+
+    if (! socket($sock, $AF_INET, $SOCK_STREAM, $Proto)) { 
+        return("socket: $!\n"); 
+    }
+    if (! bind($sock, $This)) { return("bind: $!"); }
+
+    alarm(1);
+    if (! connect($sock,$That)) { 
+	alarm(0);
+	close($sock);
+	return("No response\n");
+    } else {
+	alarm(0);
+	close($sock);
+	return(undef);
+    }
+}
+
+sub AlrmHandler {
+    if ($ChildPid) { 
+	kill(INT,$ChildPid) || die "kill $!";
+	$? = 1 << 8;
+	$ping .= "Timeout\n";
+    }
+}
+
+sub Wall {
+    while( ($no,$handle) = each(%FH)) {
+	if ($handle eq 'S0') { next; }
+	print $handle "@_";
+    }
+}
+
+sub CloseAndExit {
+    while( ($no,$handle) = each(%FH)) {
+	print $handle "Server going down.\n";
+	shutdown($FH{$no},2) || warn "shutdown: $!";
+	close $handle;
+#	print stderr "Closed $handle\n";
+    }
+    exit;
+}
