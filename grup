@@ -1,9 +1,10 @@
 #!/usr/local/bin/perl
 #Program: grup
 #Author: Michael Fisk
-#Date: 10-13-94, last modified 1-19-95
+#Date: 10-13-94, last modified 7-27-95
 #Language: Perl
-#Version: 2.0
+#Version: 2.1
+# $Id$
 
 #Expand a YP netgroup, recursively, and apply a command to all machines in it
 
@@ -12,30 +13,40 @@ $MAXPROCS = 15;
 
 if (! @ARGV) {
     print <<EOM;
-Usage: $0 [-fnqs] [[-h hostname] ...] [netgroup] [-{e|r|p} commands]
+Usage: $0 [-Option] [[-h hostname] ...] [netgroup] [-ExecOption commands]
 
-\t-e executes an sh command for each machine with any reference of %mx 
-\t\ttranslated to the remote machine name.
-\t-r is the same as -e with "rsh %mx" prepended
-\t-p is the same as -e but the command is evaluated as Perl 
+Valid "Options" are as follows.  
+Only enough of the option name to make it unamiguous is required:
+\t-fail   \tonly show output from commands that fail
+\t-first  \tshows the first up machine that returns
+\t-fork   \tfork each command instead of running them sequentially
+\t-hostname\tspecifies a hostname to use
+\t-noheader\tdon't print "Checking:" header
+\t-nosummary\tdon't print final summary
+\t-quiet  \tonly returns the output from the child processes
+\t-summary\tonly returns summary information 
+\t-succeed\tonly show output from commands that succeed
 
-\t-h specifies a hostname to use (along with/instead of) the netgroup
+The following "ExecOptions" must be after the netgroup and/or hostnames:
+\t-e[xec]   \texecutes an sh command for each machine with any
+\t\t\treference of %mx translated to the remote machine name
+\t-r[sh]    \tis the same as -e with "rsh %mx" prepended
+\t-p[erl]   \tis the same as -e but the command is evaluated as Perl 
 
-\t-f fork each command instead of running them sequentially
-\t-n shows the first up machine that returns
-\t-q only returns the output from the child processes
-\t-s only returns summary information 
-
-\tThe default command if no -e is given is:
-\t\tping %mx 1
-
+\tThe default command if no -e is given is:\tping %mx 1
 EOM
     exit;
 }
 
+$Header = 1;
+$Summary = 1;
 while($_ = shift) {
-    if (/^-n/) {
-	$short = 1;
+    if (/^-fi/) {
+	$First = 1; $Header = 0; $Summary = 0;
+    } elsif (/^-fa/) {
+	$FailsOnly = 1;
+    } elsif (/^-f/) {
+	$DoFork = 1;
     } elsif (/^-e/) {
 	$ExecCmd = join(" ",@ARGV);
 	@ARGV = ();
@@ -46,16 +57,26 @@ while($_ = shift) {
 	$PerlCmd = 1;
 	$ExecCmd = join(" ",@ARGV);
 	@ARGV = ();
+    } elsif (/^-noh/) {
+	$Header = 0;
+    } elsif (/^-nos/) {
+	$Summary = 0;
     } elsif (/^-h/) {
 	push(@mxlist,shift);
     } elsif (/^-q/) {
-        $quiet = 1;
-    } elsif (/^-f/) {
-	$DoFork = 1;
+        $quiet = 1; $Header = 0; $Summary = 0;
+    } elsif (/^-suc/) {
+	$SuccessOnly = 1;
+    } elsif (/^-s/) {
+	$SummaryOnly = 1;
+	$quiet = 1;
+    } elsif (/^-/) {
+	print stderr "Unknown or ambiguous option `$_'!\n";
     } else {
 	unshift(@groups,$_);
     }
 }
+
 
 #Parse a netgroup
 while ($group=shift(@groups)) {
@@ -75,7 +96,7 @@ if (! @mxlist) {
     print "No machines in netgroup \"$group\"\n"; 
     exit; 
 }
-print "Checking: @mxlist\n\n" unless $short || $quiet;
+print "Checking: @mxlist\n\n" if $Header;
 
 
 $upcount = $downcount = 0;
@@ -93,7 +114,7 @@ if ($DoFork) {
     &CheckGroup(@mxlist);
 }
 
-exit if $quiet; 
+exit if ! $Summary;
  
 print "\n$upcount Succeeded; $downcount Failed; ";
 print $#mxlist+1 . " Machines\n";
@@ -119,8 +140,11 @@ sub DoCmd {
 	    $ping =~ s|is ||g;
 	    $ping =~ s|from ||g;
 	}
-	print "$mx:\t" unless $quiet;
-	print $ping;
+	if (($FailsOnly && $?) || ($SuccessOnly && !$?) ||
+	    (! ($FailsOnly || $SuccessOnly))) {
+	    print "$mx:\t" unless $quiet;
+	    print $ping unless $SummaryOnly;
+	}
     }
     return $exit;
 }
@@ -152,6 +176,7 @@ sub CheckGroup {
 	} else {
 	    if (! &DoCmd($mx)) {
 		$upcount++;
+		exit if $First;
 	    } else {
 		$downcount++;
 	    }
@@ -172,7 +197,6 @@ sub CheckGroup {
 		    } else {
 			$downcount++;
 		    }
-		    exit if $short && $?;
 		    @pids[$i] = 0;
 		    $notdone--;
 		}
