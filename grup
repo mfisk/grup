@@ -1,0 +1,186 @@
+#!/usr/local/bin/perl
+#Program: grup
+#Author: Michael Fisk
+#Date: 10-13-94, last modified 1-19-95
+#Language: Perl
+#Version: 2.0
+
+#Expand a YP netgroup, recursively, and apply a command to all machines in it
+
+$DefaultCmd = "ping %mx 1";
+$MAXPROCS = 15;
+
+if (! @ARGV) {
+    print <<EOM;
+Usage: $0 [-fnqs] [[-h hostname] ...] [netgroup] [-{e|r|p} commands]
+
+\t-e executes an sh command for each machine with any reference of %mx 
+\t\ttranslated to the remote machine name.
+\t-r is the same as -e with "rsh %mx" prepended
+\t-p is the same as -e but the command is evaluated as Perl 
+
+\t-h specifies a hostname to use (along with/instead of) the netgroup
+
+\t-f fork each command instead of running them sequentially
+\t-n shows the first up machine that returns
+\t-q only returns the output from the child processes
+\t-s only returns summary information 
+
+\tThe default command if no -e is given is:
+\t\tping %mx 1
+
+EOM
+    exit;
+}
+
+while($_ = shift) {
+    if (/^-n/) {
+	$short = 1;
+    } elsif (/^-e/) {
+	$ExecCmd = join(" ",@ARGV);
+	@ARGV = ();
+    } elsif (/^-r/) {
+	$ExecCmd = "rsh %mx " . join(" ",@ARGV);
+	@ARGV = ();
+    } elsif (/^-p/) {
+	$PerlCmd = 1;
+	$ExecCmd = join(" ",@ARGV);
+	@ARGV = ();
+    } elsif (/^-h/) {
+	push(@mxlist,shift);
+    } elsif (/^-q/) {
+        $quiet = 1;
+    } elsif (/^-f/) {
+	$DoFork = 1;
+    } else {
+	unshift(@groups,$_);
+    }
+}
+
+#Parse a netgroup
+while ($group=shift(@groups)) {
+    $yplist = `ypmatch $group netgroup`;
+    @list = split(/\s+/,$yplist);
+    foreach $mx (@list) {
+	if ($mx =~ /^\(/) {
+	    $mx = (split(/[\(,]/,$mx))[1];
+	    if ( $mx ) { push(@mxlist,$mx); }
+	} else {
+	    push(@groups,$mx);
+	}
+    }	
+}
+
+if (! @mxlist) { 
+    print "No machines in netgroup \"$group\"\n"; 
+    exit; 
+}
+print "Checking: @mxlist\n\n" unless $short || $quiet;
+
+
+$upcount = $downcount = 0;
+
+if ($DoFork) {
+    while ($mx = shift(@mxlist)) {
+	unshift(@smallist,$mx);
+	if ($#smallist == $MAXPROCS) {
+	    &CheckGroup(@smallist);
+	    @smallist = ();
+	}
+    }
+    &CheckGroup(@smallist);
+} else {
+    &CheckGroup(@mxlist);
+}
+
+exit if $quiet; 
+ 
+print "\n$upcount Succeeded; $downcount Failed; ";
+print $#mxlist+1 . " Machines\n";
+exit;
+
+sub DoCmd {
+    local($mx) = shift;
+    local($execcmd);
+    local($ping);
+    local($exit) = 0;
+
+    $execcmd = $ExecCmd || $DefaultCmd;
+    $execcmd =~ s|%mx|$mx|g;
+    if ($PerlCmd) {
+	print "$mx:\t" unless $quiet;
+	$exit = ! eval $execcmd;
+	print "\n";
+    } else { 
+	$ping = `$execcmd 2>&1`;
+	$exit = $? >> 8;
+	if (! $ExecCmd) {
+	    $ping =~ s|$mx||g;
+	    $ping =~ s|is ||g;
+	    $ping =~ s|from ||g;
+	}
+	print "$mx:\t" unless $quiet;
+	print $ping;
+    }
+    return $exit;
+}
+
+sub CheckGroup {
+    local(@mxlist) = @_;
+    local($notdone);
+
+    $notdone = $#mxlist+1;
+    @pids = ();
+    $mxnum = 0;
+
+#Spawn a process to check each machine
+    foreach $mx (@mxlist) {
+	if ($DoFork) {
+	    $pids[$mxnum] = fork;	
+	    {
+		if ($pids[$mxnum] >= 0) { # Successful fork
+		    if (! $pids[$mxnum]) { # Child
+			exit(&DoCmd($mx));
+		    }		       
+		} else {		# Unsuccessful fork
+		    warn "Retrying $mx: fork: $!\n";
+		    sleep 3;
+		    redo;
+		}
+	    }
+	    $mxnum++;
+	} else {
+	    if (! &DoCmd($mx)) {
+		$upcount++;
+	    } else {
+		$downcount++;
+	    }
+	}
+    }			      
+
+    return unless $DoFork;
+
+#Check output of child processes
+    while ( $notdone ) {
+	for ($i=0; $i <= $#mxlist; $i++) {
+	    if ( @pids[$i] ) {
+		$wp = waitpid(@pids[$i],1);
+		if ( $wp > 0 ) { 
+		    $? = $? >> 8;
+		    if (! $? ) {
+			$upcount++;
+		    } else {
+			$downcount++;
+		    }
+		    exit if $short && $?;
+		    @pids[$i] = 0;
+		    $notdone--;
+		}
+	    }
+	}
+    }
+}
+
+
+
+
