@@ -1,9 +1,8 @@
 #!/usr/local/bin/perl
 #Program: grup
-#Author: Michael Fisk
-#Date: 10-13-94, last modified 7-27-95
+#Author: Michael Fisk (mfisk@nmt.edu)
+#Date: originally 10-13-94
 #Language: Perl
-#Version: 2.2
 # $Id$
 
 #Expand a YP netgroup, recursively, and apply a command to all machines in it
@@ -262,6 +261,7 @@ sub SocketTest {
     if (! bind($sock, $This)) { return("bind: $!"); }
 
     alarm(1);
+    $GlobalAlarmSocket = $sock;
     if (! connect($sock,$That)) { 
 	alarm(0);
 	close($sock);
@@ -274,6 +274,7 @@ sub SocketTest {
 }
 
 sub AlrmHandler {
+    close($GlobalAlarmSocket); #Linux sigreturn() resumes connect()
     if ($ChildPid) { 
 	kill(INT,$ChildPid) || die "kill $!";
 	$? = 1 << 8;
