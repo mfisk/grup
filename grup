@@ -1,4 +1,4 @@
-#!/usr/local/bin/perl
+#!/usr/bin/env perl
 #Program: grup
 #Author: Michael Fisk (mfisk@nmt.edu)
 #Date: originally 10-13-94
@@ -7,7 +7,7 @@
 
 #Expand a YP netgroup, recursively, and apply a command to all machines in it
 
-$DefaultCmd = "ping %mx 1";
+$DefaultCmd = "ping -c 1 %mx";
 $MAXPROCS = 15;
 
 if (! @ARGV) {
@@ -25,12 +25,12 @@ Only enough of the option name to make it unamiguous is required:
 \t-quiet  \tonly returns the output from the child processes
 \t-summary\tonly returns summary information 
 \t-succeed\tonly show output from commands that succeed
-\t-timeout\tAbort rsh commands after so many seconds (default 60)
+\t-timeout\tAbort ssh commands after so many seconds (default 60)
 
 The following "ExecOptions" must be after the netgroup and/or hostnames:
 \t-e[xec]   \texecutes an sh command for each machine with any
 \t\t\treference of %mx translated to the remote machine name
-\t-r[sh]    \tis the same as -e with "rsh %mx" prepended
+\t-r[sh]    \tis the same as -e with "ssh %mx" prepended
 \t-p[erl]   \tis the same as -e but the command is evaluated as Perl 
 
 \tThe default command if no -e is given is:\tping %mx 1
@@ -53,8 +53,8 @@ while($_ = shift) {
 	$ExecCmd = join(" ",@ARGV);
 	@ARGV = ();
     } elsif (/^-r/) {
-	$ExecCmd = "rsh %mx " . join(" ",@ARGV);
-	$CheckPort = 514;
+	$ExecCmd = "ssh %mx " . join(" ",@ARGV);
+	$CheckPort = 22;
 	@ARGV = ();
     } elsif (/^-p/) {
 	$PerlCmd = 1;
